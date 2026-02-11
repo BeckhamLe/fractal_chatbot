@@ -1,59 +1,204 @@
 import "./App.css";
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Textarea } from "@/components/ui/textarea";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 
 function App() {
   const [userMsg, setUserMsg] = useState("");   // state to keep track of user's current message
   // state to hold all the messages of both user and Claude
-  const [conversation, setConversation] = useState<{role:string, content:string}[]>([])      // have generic to set type to be array of message objects in the following format
+  const [conversation, setConversation] = useState<{role: string, content: string}[]>([]);
+
+  // useRef creates a reference to a DOM element so we can interact with it directly
+  // here we use it to target the bottom of the conversation for auto-scrolling
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // useEffect runs code after the component renders
+  // this one triggers every time 'conversation' changes (new message added)
+  // it auto-scrolls to the bottom so the user always sees the latest message
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [conversation]);
 
   // Event listener to update the user's current message whenever they change it
   const handleUserMsgChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setUserMsg(event.target.value)    
-  }
+    setUserMsg(event.target.value);
+  };
 
   const createMessage = async (userMessage: string) => {
-    const userMsgObject = {role: "user", content: userMessage}
-    setUserMsg("")                                                // clear the user's old text in the textarea
-    setConversation(conversation => [...conversation, userMsgObject])   // update conversation state to include new user message
-    
+    // don't send empty messages
+    if (!userMessage.trim()) return;
+
+    const userMsgObject = { role: "user", content: userMessage };
+    setUserMsg("");                                                // clear the user's old text in the textarea
+    setConversation(conversation => [...conversation, userMsgObject]);   // update conversation state to include new user message
+
     // Send a request to the chat endpoint in the server to send a message to claude and get back the response object from that
     const claudeResponse = await fetch('/chat', {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ message: userMessage})
+      body: JSON.stringify({ message: userMessage })
     });
 
-    const claudeResponseMsg = await claudeResponse.text()   // actual text claude replied with
-    const claudeMsgObject = {role:"assistant", content: claudeResponseMsg}    // create message object of claude's response
-    setConversation(conversation => [...conversation, claudeMsgObject])     // update state with claude's message appended to array
-  }
+    const claudeResponseMsg = await claudeResponse.text();   // actual text claude replied with
+    const claudeMsgObject = { role: "assistant", content: claudeResponseMsg };    // create message object of claude's response
+    setConversation(conversation => [...conversation, claudeMsgObject]);     // update state with claude's message appended to array
+  };
 
-  const resetConvo = async() => {
+  const resetConvo = async () => {
     const response = await fetch('/reset', {
       method: 'DELETE'
-    })
+    });
 
     // if response back from server is 200-299
-    if(response.ok){
-      setConversation([])   // clear conversation history 
+    if (response.ok) {
+      setConversation([]);   // clear conversation history
     }
-  }
+  };
 
   return (
-    <div className="App">
-      <div className="Conversation">
-        {conversation.map((message, index) => (
-          <div key={index}>
-            <p>Role: {message.role}</p>
-            <p>Message: {message.content}</p>
+    // h-screen = full viewport height, flex = flexbox layout for the whole page
+    // bg-background and text-foreground use Shadcn's dark mode CSS variables
+    <div className="h-screen flex bg-background text-foreground">
+
+      {/* ===== LEFT SIDEBAR =====
+          w-64 = fixed 256px width
+          border-r = right border to separate from main area
+          flex-shrink-0 = don't let the sidebar shrink when the window is small
+          This is just a visual placeholder for now — no functionality yet */}
+      <div className="w-64 border-r border-border flex-shrink-0 flex flex-col bg-card">
+        {/* Sidebar header with title */}
+        <div className="p-4 border-b border-border">
+          <h2 className="text-lg font-semibold">Chat History</h2>
+        </div>
+
+        {/* Placeholder area where chat session logs will go later
+            flex-1 = take up all remaining vertical space
+            overflow-y-auto = scrollable if content overflows */}
+        <div className="flex-1 overflow-y-auto p-3 space-y-2">
+          {/* Example placeholder session items to show what it'll look like */}
+          <div className="p-3 rounded-lg bg-accent/50 cursor-pointer hover:bg-accent transition-colors">
+            <p className="text-sm font-medium truncate">Current Chat</p>
           </div>
-        ))}
+        </div>
       </div>
-      <textarea className="UserMsg" value={userMsg} onChange={handleUserMsgChange}></textarea>
-      <button className="ChatBtn" onClick={() => createMessage(userMsg)}>chat</button>
-      <button onClick={() => resetConvo()}>Reset</button>
+
+      {/* ===== MAIN CHAT AREA =====
+          flex-1 = take up all remaining horizontal space after the sidebar
+          flex flex-col = stack children vertically (conversation on top, input bar on bottom) */}
+      <div className="flex-1 flex flex-col">
+
+        {/* ===== CONVERSATION CONTAINER =====
+            flex-1 = grow to fill all available vertical space (pushes input bar to bottom)
+            overflow-hidden = hide overflow so ScrollArea handles scrolling internally */}
+        <ScrollArea className="flex-1 overflow-hidden">
+          {/* max-w-3xl = cap the conversation width for readability (like Claude desktop)
+              mx-auto = center it horizontally
+              p-6 = padding around the messages
+              space-y-6 = vertical gap between each message */}
+          <div className="max-w-3xl mx-auto p-6 space-y-6">
+            {conversation.map((message, index) => (
+              // Each message row: flex layout to position avatar + speech bubble side by side
+              // justify-end = push user messages to the right side
+              // animate-in: fade-in-0 slide-in-from-bottom-2 = Shadcn animation that fades in
+              // and slides up from below, giving each new message a smooth entrance
+              <div
+                key={index}
+                className={`flex items-start gap-3 animate-in fade-in-0 slide-in-from-bottom-2 duration-300 ${
+                  message.role === "user" ? "justify-end" : "justify-start"
+                }`}
+              >
+                {/* ===== CLAUDE'S AVATAR (left side) =====
+                    Only show before the speech bubble when it's Claude's message
+                    order-none keeps it on the left */}
+                {message.role === "assistant" && (
+                  <div className="flex-shrink-0 w-9 h-9 rounded-full bg-purple-600 flex items-center justify-center text-white text-sm font-bold shadow-lg">
+                    C
+                  </div>
+                )}
+
+                {/* ===== SPEECH BUBBLE =====
+                    Card component from Shadcn gives us the rounded container with border
+                    max-w-[80%] = bubble won't take more than 80% of the conversation width
+                    The background color changes based on who's speaking:
+                    - User: primary color (lighter) to stand out on the right
+                    - Claude: card color (darker) to sit on the left
+                    relative + before:pseudo-element creates the little triangle "tail"
+                    pointing toward the speaker's avatar, like a comic book speech bubble */}
+                <Card className={`max-w-[80%] shadow-md py-0 ${
+                  message.role === "user"
+                    ? "bg-primary text-primary-foreground"      // user gets the accent color
+                    : "bg-card border-border"                   // claude gets the card background
+                }`}>
+                  <CardContent className="p-3">
+                    {/* whitespace-pre-wrap = preserve line breaks in the message text
+                        text-sm = slightly smaller text for a chat feel */}
+                    <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                  </CardContent>
+                </Card>
+
+                {/* ===== USER'S AVATAR (right side) =====
+                    Only show after the speech bubble when it's the user's message */}
+                {message.role === "user" && (
+                  <div className="flex-shrink-0 w-9 h-9 rounded-full bg-blue-600 flex items-center justify-center text-white text-sm font-bold shadow-lg">
+                    U
+                  </div>
+                )}
+              </div>
+            ))}
+
+            {/* Invisible div that sits at the very bottom of the message list.
+                When a new message is added, useEffect scrolls this into view,
+                bringing the user to the latest message automatically */}
+            <div ref={messagesEndRef} />
+          </div>
+        </ScrollArea>
+
+        {/* ===== BOTTOM INPUT BAR =====
+            sticky bottom-0 = stays fixed at the bottom of the main area even when scrolling
+            border-t = top border to visually separate from conversation
+            bg-background = solid background so messages don't show through when scrolling
+            p-4 = padding around the input area */}
+        <div className="sticky bottom-0 border-t border-border bg-background p-4">
+          {/* max-w-3xl mx-auto = match the conversation width and centering
+              flex gap-3 items-end = lay out textarea and buttons side by side, aligned to bottom
+              items-end so the buttons align with the bottom of the textarea if it grows */}
+          <div className="max-w-3xl mx-auto flex gap-3 items-end">
+            {/* Shadcn Textarea component — styled version of the native textarea
+                flex-1 = take up all available horizontal space
+                resize-none = prevent manual resizing (keeps layout clean)
+                min-h-[44px] max-h-[120px] = minimum and maximum height constraints */}
+            <Textarea
+              className="flex-1 resize-none min-h-[44px] max-h-[120px]"
+              placeholder="Type a message..."
+              value={userMsg}
+              onChange={handleUserMsgChange}
+              // onKeyDown listens for keyboard events on this element
+              // When Enter is pressed WITHOUT Shift, it sends the message
+              // Shift+Enter allows typing a new line instead
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();        // prevent the default newline behavior
+                  createMessage(userMsg);     // send the message instead
+                }
+              }}
+            />
+            {/* Shadcn Button — "default" variant uses the primary color from our theme
+                onClick sends the current message to the chat endpoint */}
+            <Button onClick={() => createMessage(userMsg)}>
+              Send
+            </Button>
+            {/* "outline" variant = bordered button with transparent background
+                Visually less prominent than Send since reset is a less common action */}
+            <Button variant="outline" onClick={() => resetConvo()}>
+              Reset
+            </Button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
