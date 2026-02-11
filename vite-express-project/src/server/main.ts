@@ -55,6 +55,12 @@ app.post('/chat', async(req, res) => {
   }
 })
 
+// Endpoint to reset chat history
+app.delete('/reset', (req, res) => {
+  message_history = []  // clear message history
+  res.status(200).end()
+})
+
 ViteExpress.listen(app, 3000, () =>
   console.log("Server is listening on port 3000..."),
 );
