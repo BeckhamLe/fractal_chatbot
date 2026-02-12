@@ -1,5 +1,9 @@
 .env
 
+# Diagrams and Design pictures
+diagrams
+design_ideas
+
 # Claude
 CLAUDE.md
 .claude
