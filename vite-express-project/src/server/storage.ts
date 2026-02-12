@@ -6,8 +6,8 @@ export interface Storage {
     // uses id to find the conversation in storage, add new message to array of messages in convo, then return the updated conversation to server
     addMessageToConversation(convoId: string, message: Message): Conversation
 
-    // returns copy of map of all conversations currently in storage
-    getConversations(): Map<string, Conversation>
+    // returns the title and conversation id of all conversations currently in storage
+    getConversations(): {convoId: string, convoTitle: string}[]
 
     getConversation(convoId: string): Conversation
     createConversation(): Conversation
