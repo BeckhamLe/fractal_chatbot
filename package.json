@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "@supabase/supabase-js": "^2.95.3",
     "better-sqlite3": "^12.6.2"
   },
   "devDependencies": {

@@ -3,11 +3,14 @@ import ViteExpress from "vite-express";
 import dotenv from 'dotenv';
 import Anthropic from "@anthropic-ai/sdk";  // import anthropic sdk
 import { Storage } from "./storage.js"    // import storage interface and its methods
-import { Conversation, Message } from "src/shared/types.js";
-import Database from 'better-sqlite3'
+import { Conversation, Message } from "src/shared/types.js";    // import Message and Conversation interfaces
+import { eq } from 'drizzle-orm'      // import Drizzle's version of = in SQL
+import { drizzle, PostgresJsDatabase } from 'drizzle-orm/postgres-js'  // imports drizzle function that creates drizzle ORM instance and type of database using drizzle/postgres
+import postgres from 'postgres'      // the Postgres driver; establishes network connection to supabase database
+import * as schema from './schema.js'   // imports everything from schema file
 
 // configure dotenv 
-dotenv.config() 
+// dotenv.config() 
 
 // Create new anthropic client
 const anthropic = new Anthropic()
@@ -15,88 +18,87 @@ const anthropic = new Anthropic()
 const app = express();  // create express app server
 app.use(express.json())   // have this to parse request body and be able to access it
 
-// SQLite Storage Class
-// functions setup here are for sending conversations to .db file
-class SqliteStorage implements Storage {
-  // declare database property for class with no value
-  private db: Database.Database
-  
-  // Constructor method: Runs once to setup database
-  constructor(db: Database.Database) {
-    // assign database from what's passed in parameters when new instance of class is called
-    this.db = db
+// Supabase Storage Class using Drizzle/Postgres
+class SupabaseStorage implements Storage {
+  private db: PostgresJsDatabase<typeof schema>   // Drizzle ORM instance; object that lets server read/write to database
+
+  // Constructor method: Sets up connection with remote database
+  constructor(databaseUrl: string) {
+    // connection object
+    const client = postgres(databaseUrl)    // establish connection to supabase database
     
-    // Create and setup tables for conversation and message objects to be stored in database
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS conversations (
-        id TEXT PRIMARY KEY,                                                                                                                                             
-        title TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        conversation_id TEXT NOT NULL,
-        role TEXT NOT NULL,
-        content TEXT NOT NULL,
-        FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-      ); 
-    `)
+    // combines both the connection and schema 
+    this.db = drizzle(client, {schema})     // gives typed methods to read and write data to database
   }
 
-  addMessageToConversation(convoId: string, message: Message): Conversation {
-    // SQL Command to insert new message object into the table of messages 
-    // .run() = runs the sql command with the following parameters passed into it
-    this.db.prepare(`
-        INSERT INTO messages (conversation_id, role, content) VALUES ( ?, ?, ?);
-    `).run(
-      convoId, message.role, message.content
-    )
+  async addMessageToConversation (convoId: string, message: Message): Promise<Conversation> {
+    // insert new message object into messages table
+    await this.db
+      .insert(schema.messages)
+      .values({conversationId: convoId, role: message.role, content: message.content})
 
-    // Run method to get the conversation object just added message to and return it
-    const updatedConvo = this.getConversation(convoId);
-    return updatedConvo;
+    // Retrieve the updated conversation 
+    const updatedConvo = await this.getConversation(convoId)
+    
+    return updatedConvo // give to server
   }
 
-  getConversation(convoId: string): Conversation {
-    // SQL command to get conversation row that just got updated
-    // .get() to get single row
-    const convoRow = this.db.prepare<string, {id: string, title: string}>(`
-      SELECT id, title FROM conversations WHERE id = ?  
-    `).get(convoId)
+  async getConversation (convoId: string): Promise<Conversation> {
+    // returns back an array even if only one conversation is found (which is what we want)
+    // only returns Conversation object with id and title
+    const convo = 
+      await this.db
+        .select()
+        .from(schema.conversations)
+        .where(eq(schema.conversations.id, convoId))
 
-    if(convoRow){
-      // SQL Command to get all ordered messages associated with conversation that got updated with new message
-      // .all() to get multiple rows
-      const convoMsgRows = this.db.prepare<string, {role: string, content: string}>(`
-          SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY id;  
-      `).all(convoId)
-      
-      // form Conversation object to give to server
-      const returnConvo: Conversation = {
-        id: convoRow?.id as string,
-        title: convoRow?.title as string,
-        messages: convoMsgRows as Message[]
-      }
-
-      return returnConvo
-    } else{
-      throw new Error("Conversation doesn't exist")
+    if(convo.length === 0){
+      throw new Error("Conversation doesn't exists")
     }
+
+    // returns back ordered array of messages associated with selected convo
+    const convoMsgs = 
+      await this.db 
+        .select()
+        .from(schema.messages)
+        .where(eq(schema.messages.conversationId, convoId))
+        .orderBy(schema.messages.id)
+
+    // Array of message objects that only have role and content
+    // transformed convoMsgs to exclude id and conversation_id fields
+    // casted the role since role sent and stored in the database is only either user or assistant
+    const roleContentMsgs: Message[] = convoMsgs.map<Message>((msg) => ({role: msg.role as "user" | "assistant", content: msg.content}))
+
+    // Create new conversation object to put all data info retrieved from database into
+    const returnedConvo: Conversation = {
+      id: convo[0].id,
+      title: convo[0].title,
+      messages: roleContentMsgs
+    }
+
+    return returnedConvo
   }
 
-  getConversations(): { convoId: string; convoTitle: string; }[] {
-    // SQL command to get an array of objects with the conversation id and title of all conversation rows
-    // used AS to assign aliases to id and title of each conversation row so no type mismatches
-    const convoIdTitleList = this.db.prepare(` SELECT id AS convoId, title AS convoTitle FROM conversations;`).all()
+  async getConversations (): Promise<{ convoId: string; convoTitle: string; }[]> {
+   
+    // array of all existing conversation objects with their id and title
+    const convoIdTitleList = 
+      await this.db
+        .select()
+        .from(schema.conversations)
 
-    return convoIdTitleList as { convoId: string; convoTitle: string; }[]
+    // Transformed array to switch aliases to match type name of interface
+    const formattedList = convoIdTitleList.map<{ convoId: string; convoTitle: string; }>((convo) => ({convoId: convo.id, convoTitle: convo.title}))
+        
+    return formattedList
   }
 
-  createConversation(): Conversation {
+  async createConversation (): Promise<Conversation> {
     const newId = crypto.randomUUID()   // generate a random unique id for new conversation object
-
-    // Insert a new conversation with new id and title to database
-    this.db.prepare(`INSERT INTO conversations (id, title) VALUES (?, ?)`).run(newId, newId)
+    
+    await this.db
+      .insert(schema.conversations)
+      .values({id: newId, title: newId})
 
     // create a new conversation object
     const newConvo: Conversation = {
@@ -109,8 +111,8 @@ class SqliteStorage implements Storage {
   }
 }
 
-// Create SqliteStorage instance to create database file
-const storage = new SqliteStorage(new Database('./src/db/conversations.db'))
+// Create SupabaseStorage instance and pass url of database for postgres driver
+const storage = new SupabaseStorage(process.env.DATABASE_URL!)
 
 // Chat Endpoint
 app.post('/chat', async(req, res) => {
@@ -119,7 +121,7 @@ app.post('/chat', async(req, res) => {
 
   // create message object of user and their message
   //pass object and conversation id to storage function to update convo with new msg in the memory instanace
-  const updatedConvoUser = storage.addMessageToConversation(convoId, { role: "user", content: userMsg}) 
+  const updatedConvoUser = await storage.addMessageToConversation(convoId, { role: "user", content: userMsg}) 
   
   // create the message and send to anthropic api
   const apiMsg = await anthropic.messages.create({
@@ -134,7 +136,7 @@ app.post('/chat', async(req, res) => {
   if(claudeResponse.type === "text"){
     // create message object of claude and their message
     //pass object and conversation id to storage function to update convo with new msg in the memory instanace
-    const updatedConvoClaude = storage.addMessageToConversation(convoId, {role: apiMsg.role, content: claudeResponse.text})
+    const updatedConvoClaude = await storage.addMessageToConversation(convoId, {role: apiMsg.role, content: claudeResponse.text})
     res.json(updatedConvoClaude);             // send to front end conversation updated with new user and claude msg in json format
 
   } else{
@@ -143,19 +145,23 @@ app.post('/chat', async(req, res) => {
 })
 
 // Get Conversation Endpoint
-app.get('/convo/:id', (req, res) => {
+app.get('/convo/:id', async (req, res) => {
   const convoId = req.params.id   // conversation id in request
-  res.json(storage.getConversation(convoId))    // send conversation that has same id in request to front end
+  const convo = await storage.getConversation(convoId)
+
+  res.json(convo)    // send conversation that has same id in request to front end
 })
 
 // Get All Conversations Endpoint
-app.get('/convos', (req, res) => {
-  res.json(storage.getConversations())    // send array of objects that have conversation id and title of all convos
+app.get('/convos', async (req, res) => {
+  const allConvos = await storage.getConversations()
+  
+  res.json(allConvos)    // send array of objects that have conversation id and title of all convos
 })
 
 // Create Conversation Endpoint
-app.get('/create', (req, res) => {
-  const newConvo = storage.createConversation()   // run storage function to create a new conversation and store it in memory
+app.get('/create', async (req, res) => {
+  const newConvo = await storage.createConversation()   // run storage function to create a new conversation and store it in memory
   res.json(newConvo)                            // return that newly created convo to frontend
 })
 
