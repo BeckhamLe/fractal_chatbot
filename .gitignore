@@ -1,5 +1,8 @@
 .env
 
+# SQLite Database
+*.db
+
 # Diagrams and Design pictures
 diagrams
 design_ideas

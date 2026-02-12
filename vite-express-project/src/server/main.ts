@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import Anthropic from "@anthropic-ai/sdk";  // import anthropic sdk
 import { Storage } from "./storage.js"    // import storage interface and its methods
 import { Conversation, Message } from "src/shared/types.js";
+import Database from 'better-sqlite3'
 
 // configure dotenv 
 dotenv.config() 
@@ -14,47 +15,89 @@ const anthropic = new Anthropic()
 const app = express();  // create express app server
 app.use(express.json())   // have this to parse request body and be able to access it
 
-class inMemoryStorage implements Storage {
-  private conversationHistory = new Map<string, Conversation>()   // where all the conversation sessions are stored
+// SQLite Storage Class
+// functions setup here are for sending conversations to .db file
+class SqliteStorage implements Storage {
+  // declare database property for class with no value
+  private db: Database.Database
+  
+  // Constructor method: Runs once to setup database
+  constructor(db: Database.Database) {
+    // assign database from what's passed in parameters when new instance of class is called
+    this.db = db
+    
+    // Create and setup tables for conversation and message objects to be stored in database
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS conversations (
+        id TEXT PRIMARY KEY,                                                                                                                                             
+        title TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+      ); 
+    `)
+  }
 
   addMessageToConversation(convoId: string, message: Message): Conversation {
-    const selectedConvo = this.conversationHistory.get(convoId)   // search for the conversation using convoId and setting that found conversation to a variable
+    // SQL Command to insert new message object into the table of messages 
+    // .run() = runs the sql command with the following parameters passed into it
+    this.db.prepare(`
+        INSERT INTO messages (conversation_id, role, content) VALUES ( ?, ?, ?);
+    `).run(
+      convoId, message.role, message.content
+    )
 
-    // Check if conversation found actually exists
-    if(selectedConvo){
-      selectedConvo.messages.push(message)  // if so, add the new message to the array of current messages
-      return selectedConvo              // return conversation object updated to server to send to frontend
-    } else {
+    // Run method to get the conversation object just added message to and return it
+    const updatedConvo = this.getConversation(convoId);
+    return updatedConvo;
+  }
+
+  getConversation(convoId: string): Conversation {
+    // SQL command to get conversation row that just got updated
+    // .get() to get single row
+    const convoRow = this.db.prepare<string, {id: string, title: string}>(`
+      SELECT id, title FROM conversations WHERE id = ?  
+    `).get(convoId)
+
+    if(convoRow){
+      // SQL Command to get all ordered messages associated with conversation that got updated with new message
+      // .all() to get multiple rows
+      const convoMsgRows = this.db.prepare<string, {role: string, content: string}>(`
+          SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY id;  
+      `).all(convoId)
+      
+      // form Conversation object to give to server
+      const returnConvo: Conversation = {
+        id: convoRow?.id as string,
+        title: convoRow?.title as string,
+        messages: convoMsgRows as Message[]
+      }
+
+      return returnConvo
+    } else{
       throw new Error("Conversation doesn't exist")
     }
   }
 
-  getConversation(convoId: string): Conversation {
-    const selectedConvo = this.conversationHistory.get(convoId)    // search for the conversation using convoId and setting that found conversation to a variable
-    
-    // check if conversation found exists
-    if(selectedConvo){
-      return selectedConvo    // if found then return conversation object for server to send to frontend
-    } else {
-      throw new Error("Conversation not found")   // if not then throw an error
-    }
-  }
+  getConversations(): { convoId: string; convoTitle: string; }[] {
+    // SQL command to get an array of objects with the conversation id and title of all conversation rows
+    // used AS to assign aliases to id and title of each conversation row so no type mismatches
+    const convoIdTitleList = this.db.prepare(` SELECT id AS convoId, title AS convoTitle FROM conversations;`).all()
 
-  getConversations(): {convoId: string, convoTitle: string}[] {
-    // Check if there's no convos in memory (new user)
-    if(this.conversationHistory.size === 0){
-      return []         // return empty array 
-    }
-
-    // this.conversationHistory.values() = iterator to only go through list of conversations once
-    // Array.from() = converts iterator passed to it into an array so can use map method
-    // use map() to transform the array into an array of only conversation id and title for each conversation in the list
-    return Array.from(this.conversationHistory.values()).map((convo) => ({convoId: convo.id, convoTitle: convo.title}))
+    return convoIdTitleList as { convoId: string; convoTitle: string; }[]
   }
 
   createConversation(): Conversation {
     const newId = crypto.randomUUID()   // generate a random unique id for new conversation object
-    
+
+    // Insert a new conversation with new id and title to database
+    this.db.prepare(`INSERT INTO conversations (id, title) VALUES (?, ?)`).run(newId, newId)
+
     // create a new conversation object
     const newConvo: Conversation = {
       id: newId,
@@ -62,13 +105,12 @@ class inMemoryStorage implements Storage {
       messages: []
     }
 
-    this.conversationHistory.set(newId, newConvo)   // add the newly created conversation object to the map of conversations
     return newConvo   // return new convo for server to send to frontend
   }
 }
 
-// Create inMemoryStorage instance
-const storage = new inMemoryStorage()
+// Create SqliteStorage instance to create database file
+const storage = new SqliteStorage(new Database('./src/db/conversations.db'))
 
 // Chat Endpoint
 app.post('/chat', async(req, res) => {
