@@ -1,4 +1,6 @@
 import "./App.css";
+import requestServices from './services/requests'       // service layer to handle creating requests and parsing server responses for frontend
+import { Message, Conversation} from '../shared/types'  // import Message and Conversation type interfaces
 import { useState, useRef, useEffect } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
@@ -7,8 +9,24 @@ import { Card, CardContent } from "@/components/ui/card";
 
 function App() {
   const [userMsg, setUserMsg] = useState("");   // state to keep track of user's current message
-  // state to hold all the messages of both user and Claude
-  const [conversation, setConversation] = useState<{role: string, content: string}[]>([]);
+  const [selectedConvoId, setSelectedConvoId] = useState("");   // state to hold id of conversation user is currently on 
+  const [currConvo, setCurrConvo] = useState<Conversation | null>(null)    // state to hold current conversation; initialized to be null to handle new users with no conversation history in memory
+  const [sidebarConvos, setSidebarConvos] = useState<{convoId: string, convoTitle: string}[]>()   // state to hold array of objects with id and title of existing convos
+
+  // useEffect for initializing current conversation to be a new one if user has no prior ex
+  useEffect(() => {
+    // Use Service Layer method to create new convo and update currConvo state
+    requestServices.createConvo().then((newConvo: Conversation) => {
+      setCurrConvo(newConvo)
+      setSelectedConvoId(newConvo.id)
+    })
+
+    // Use Service Layer method to set up sidebar of existing convos
+    requestServices.getConvos().then((convoArray: {convoId: string, convoTitle: string}[]) => {
+      setSidebarConvos(convoArray)    // set sidebar with array of id and title objects of all conversations or empty array if no convos in memory
+    })
+
+  }, [])
 
   // useRef creates a reference to a DOM element so we can interact with it directly
   // here we use it to target the bottom of the conversation for auto-scrolling
@@ -19,35 +37,54 @@ function App() {
   // it auto-scrolls to the bottom so the user always sees the latest message
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [conversation]);
+    
+    // Use Service Layer method to set up sidebar of existing convos
+    requestServices.getConvos().then((convoArray: {convoId: string, convoTitle: string}[]) => {
+      setSidebarConvos(convoArray)    // set sidebar with array of id and title objects of all conversations or empty array if no convos in memory
+    })
+
+  }, [currConvo]);
+
+  // Handle edge case of currConvo being null in between first render and first useEffect()
+  if(currConvo === null){
+    return (<p>Loading...</p>)
+  }
 
   // Event listener to update the user's current message whenever they change it
   const handleUserMsgChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     setUserMsg(event.target.value);
   };
 
-  const createMessage = async (userMessage: string) => {
+  const createMessage = (userMessage: string) => {
     // don't send empty messages
     if (!userMessage.trim()) return;
 
-    const userMsgObject = { role: "user", content: userMessage };
     setUserMsg("");                                                // clear the user's old text in the textarea
-    setConversation(conversation => [...conversation, userMsgObject]);   // update conversation state to include new user message
-
-    // Send a request to the chat endpoint in the server to send a message to claude and get back the response object from that
-    const claudeResponse = await fetch('/chat', {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ message: userMessage })
-    });
-
-    const claudeResponseMsg = await claudeResponse.text();   // actual text claude replied with
-    const claudeMsgObject = { role: "assistant", content: claudeResponseMsg };    // create message object of claude's response
-    setConversation(conversation => [...conversation, claudeMsgObject]);     // update state with claude's message appended to array
+    requestServices.sendMsg(selectedConvoId, userMessage).then((updatedConvo) => {
+      setCurrConvo(updatedConvo)
+    })
   };
 
+  const createNewConvo = () => {
+    // Use Service Layer method to create new convo and update currConvo state
+    requestServices.createConvo().then((newConvo: Conversation) => {
+      setCurrConvo(newConvo)
+      setSelectedConvoId(newConvo.id)
+    })
+
+    // Use Service Layer method to set up sidebar of existing convos
+    requestServices.getConvos().then((convoArray: {convoId: string, convoTitle: string}[]) => {
+      setSidebarConvos(convoArray)    // set sidebar with array of id and title objects of all conversations or empty array if no convos in memory
+    })
+  }
+
+  const clickConvo = (convoId: string) => {
+    requestServices.getConvo(convoId).then((returnedConvo) => {
+      setCurrConvo(returnedConvo)
+    })
+  }
+
+  /*
   const resetConvo = async () => {
     const response = await fetch('/reset', {
       method: 'DELETE'
@@ -58,6 +95,7 @@ function App() {
       setConversation([]);   // clear conversation history
     }
   };
+  */
 
   return (
     // h-screen = full viewport height, flex = flexbox layout for the whole page
@@ -81,8 +119,13 @@ function App() {
         <div className="flex-1 overflow-y-auto p-3 space-y-2">
           {/* Example placeholder session items to show what it'll look like */}
           <div className="p-3 rounded-lg bg-accent/50 cursor-pointer hover:bg-accent transition-colors">
-            <p className="text-sm font-medium truncate">Current Chat</p>
+            {sidebarConvos?.map((convo) => (
+              <p key={convo.convoId} onClick={() => clickConvo(convo.convoId)} className="text-sm font-medium truncate">{convo.convoTitle}</p>
+            ))}
           </div>
+          <Button onClick={() => createNewConvo()}>
+            New Conversation
+          </Button>
         </div>
       </div>
 
@@ -100,7 +143,7 @@ function App() {
               p-6 = padding around the messages
               space-y-6 = vertical gap between each message */}
           <div className="max-w-3xl mx-auto p-6 space-y-6">
-            {conversation.map((message, index) => (
+            {currConvo.messages.map((message, index) => (
               // Each message row: flex layout to position avatar + speech bubble side by side
               // justify-end = push user messages to the right side
               // animate-in: fade-in-0 slide-in-from-bottom-2 = Shadcn animation that fades in
@@ -193,7 +236,7 @@ function App() {
             </Button>
             {/* "outline" variant = bordered button with transparent background
                 Visually less prominent than Send since reset is a less common action */}
-            <Button variant="outline" onClick={() => resetConvo()}>
+            <Button variant="outline">
               Reset
             </Button>
           </div>
