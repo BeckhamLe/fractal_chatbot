@@ -114,6 +114,15 @@
   --sidebar-ring: oklch(0.552 0.016 285.938);
 }
 
+.responsive-text {
+  @apply text-sm md:text-base lg:text-lg;
+}
+
+.avatar {
+  @apply text-sm md:text-base lg:text-xl;
+  @apply w-9 h-9 md:w-10 md:h-10 lg:w-11 lg:h-11;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
