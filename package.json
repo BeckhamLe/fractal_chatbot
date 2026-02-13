@@ -1,7 +1,8 @@
 {
   "dependencies": {
     "@supabase/supabase-js": "^2.95.3",
-    "better-sqlite3": "^12.6.2"
+    "better-sqlite3": "^12.6.2",
+    "react-router": "^7.13.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13"

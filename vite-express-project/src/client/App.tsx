@@ -6,6 +6,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { searchForWorkspaceRoot } from "vite";
 
 function App() {
   const [userMsg, setUserMsg] = useState("");   // state to keep track of user's current message
@@ -15,15 +16,28 @@ function App() {
 
   // useEffect for initializing current conversation to be a new one if user has no prior ex
   useEffect(() => {
-    // Use Service Layer method to create new convo and update currConvo state
-    requestServices.createConvo().then((newConvo: Conversation) => {
-      setCurrConvo(newConvo)
-      setSelectedConvoId(newConvo.id)
-    })
 
     // Use Service Layer method to set up sidebar of existing convos
     requestServices.getConvos().then((convoArray: {convoId: string, convoTitle: string}[]) => {
       setSidebarConvos(convoArray)    // set sidebar with array of id and title objects of all conversations or empty array if no convos in memory
+
+      if(convoArray.length === 0){
+        // Use Service Layer method to create new convo and update currConvo state
+        requestServices.createConvo().then((newConvo: Conversation) => {
+          setCurrConvo(newConvo)
+          setSelectedConvoId(newConvo.id)
+        })
+      } else if(convoArray.length > 0){
+        if(selectedConvoId === ""){
+          requestServices.getConvo(convoArray[0].convoId).then((returnedConvo) => {
+            setCurrConvo(returnedConvo)
+          })
+        } else {
+          requestServices.getConvo(selectedConvoId).then((returnedConvo) => {
+            setCurrConvo(returnedConvo)
+          })
+        }
+      }
     })
 
   }, [])
@@ -47,7 +61,7 @@ function App() {
 
   // Handle edge case of currConvo being null in between first render and first useEffect()
   if(currConvo === null){
-    return (<p>Loading...</p>)
+    return (<p className="responsive-text">Loading...</p>)
   }
 
   // Event listener to update the user's current message whenever they change it
@@ -81,6 +95,7 @@ function App() {
   const clickConvo = (convoId: string) => {
     requestServices.getConvo(convoId).then((returnedConvo) => {
       setCurrConvo(returnedConvo)
+      setSelectedConvoId(returnedConvo.id)
     })
   }
 
@@ -110,20 +125,36 @@ function App() {
       <div className="w-64 border-r border-border flex-shrink-0 flex flex-col bg-card">
         {/* Sidebar header with title */}
         <div className="p-4 border-b border-border">
-          <h2 className="text-lg font-semibold">Chat History</h2>
+          <h2 className="sm:text-md text-lg md:text-xl font-semibold">Chat History</h2>
         </div>
 
         {/* Placeholder area where chat session logs will go later
             flex-1 = take up all remaining vertical space
             overflow-y-auto = scrollable if content overflows */}
-        <div className="flex-1 overflow-y-auto p-3 space-y-2">
-          {/* Example placeholder session items to show what it'll look like */}
-          <div className="p-3 rounded-lg bg-accent/50 cursor-pointer hover:bg-accent transition-colors">
-            {sidebarConvos?.map((convo) => (
-              <p key={convo.convoId} onClick={() => clickConvo(convo.convoId)} className="text-sm font-medium truncate">{convo.convoTitle}</p>
-            ))}
-          </div>
-          <Button onClick={() => createNewConvo()}>
+        <div className="flex-1 overflow-y-auto p-3 space-y-2 items-stretch">
+          {/* ===== CONVERSATION TABS =====
+              p-3 = inner padding so text doesn't touch edges of tab
+              rounded-lg = rounded corners to give each tab a button-like shape
+              cursor-pointer = shows hand icon on hover to signal it's clickable
+              transition-colors = smoothly animates background color changes instead of snapping
+              truncate = cuts off long titles with "..." so they don't overflow the sidebar
+              bg-accent = solid background on the active tab to show which convo is selected
+              hover:bg-accent/50 = semi-transparent background on hover for inactive tabs
+              Parent's space-y-2 adds vertical gap between each tab */}
+          {sidebarConvos?.map((convo) => (
+            <p
+              key={convo.convoId}
+              onClick={() => clickConvo(convo.convoId)}
+              className={`text-sm md:text-md font-medium truncate p-3 rounded-lg cursor-pointer transition-colors ${
+                selectedConvoId === convo.convoId
+                  ? "bg-accent"
+                  : "hover:bg-accent/50"
+              }`}
+            >
+              {convo.convoTitle}
+            </p>
+          ))}
+          <Button className="py-1 md:py-2 w-full" onClick={() => createNewConvo()}>
             New Conversation
           </Button>
         </div>
@@ -158,7 +189,7 @@ function App() {
                     Only show before the speech bubble when it's Claude's message
                     order-none keeps it on the left */}
                 {message.role === "assistant" && (
-                  <div className="flex-shrink-0 w-9 h-9 rounded-full bg-purple-600 flex items-center justify-center text-white text-sm font-bold shadow-lg">
+                  <div className="flex-shrink-0 avatar rounded-full bg-purple-600 flex items-center justify-center text-white font-bold shadow-lg">
                     C
                   </div>
                 )}
@@ -179,14 +210,14 @@ function App() {
                   <CardContent className="p-3">
                     {/* whitespace-pre-wrap = preserve line breaks in the message text
                         text-sm = slightly smaller text for a chat feel */}
-                    <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                    <p className="responsive-text whitespace-pre-wrap">{message.content}</p>
                   </CardContent>
                 </Card>
 
                 {/* ===== USER'S AVATAR (right side) =====
                     Only show after the speech bubble when it's the user's message */}
                 {message.role === "user" && (
-                  <div className="flex-shrink-0 w-9 h-9 rounded-full bg-blue-600 flex items-center justify-center text-white text-sm font-bold shadow-lg">
+                  <div className="flex-shrink-0 avatar rounded-full bg-blue-600 flex items-center justify-center text-white font-bold shadow-lg">
                     U
                   </div>
                 )}
@@ -209,7 +240,7 @@ function App() {
           {/* max-w-3xl mx-auto = match the conversation width and centering
               flex gap-3 items-end = lay out textarea and buttons side by side, aligned to bottom
               items-end so the buttons align with the bottom of the textarea if it grows */}
-          <div className="max-w-3xl mx-auto flex gap-3 items-end">
+          <div className="max-w-3xl mx-auto flex gap-3 items-stretch">
             {/* Shadcn Textarea component — styled version of the native textarea
                 flex-1 = take up all available horizontal space
                 resize-none = prevent manual resizing (keeps layout clean)

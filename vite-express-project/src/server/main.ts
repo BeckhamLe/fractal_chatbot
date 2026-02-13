@@ -10,7 +10,7 @@ import postgres from 'postgres'      // the Postgres driver; establishes network
 import * as schema from './schema.js'   // imports everything from schema file
 
 // configure dotenv 
-// dotenv.config() 
+dotenv.config() 
 
 // Create new anthropic client
 const anthropic = new Anthropic()
