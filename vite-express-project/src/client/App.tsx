@@ -29,8 +29,10 @@ function App() {
         })
       } else if(convoArray.length > 0){
         if(selectedConvoId === ""){
+          console.log(convoArray[0].convoId)
           requestServices.getConvo(convoArray[0].convoId).then((returnedConvo) => {
             setCurrConvo(returnedConvo)
+            setSelectedConvoId(returnedConvo.id)
           })
         } else {
           requestServices.getConvo(selectedConvoId).then((returnedConvo) => {
